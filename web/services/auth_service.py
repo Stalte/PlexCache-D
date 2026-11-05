@@ -303,6 +303,13 @@ class AuthService:
                 logger.info("Plex login validated for admin user: %s", username)
                 return {"account_id": account_id, "username": username}
 
+            # Fork: the secondary server's owner may log in too
+            secondary = self._load_settings().get("secondary_server") or {}
+            secondary_admin_id = str(secondary.get("admin_plex_id") or "")
+            if secondary.get("enabled") and secondary_admin_id and account_id == secondary_admin_id:
+                logger.info("Plex login validated for secondary server admin: %s", username)
+                return {"account_id": account_id, "username": username}
+
             logger.warning(
                 "Plex login rejected: account %s (%s) is not admin (%s)",
                 account_id, username, admin_plex_id,

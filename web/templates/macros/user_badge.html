@@ -12,6 +12,9 @@
     style:      Inline style string (e.g. 'margin-right: 0.25rem;').
 #}
 {% macro user_badge(user, user_types, classes='', style='') -%}
-{%- set t = (user_types or {}).get(user, 'shared') -%}
-<span class="badge user-badge user-badge--{{ t }}{% if classes %} {{ classes }}{% endif %}"{% if style %} style="{{ style }}"{% endif %}>{{ user }}</span>
+{#- Fork: users from the secondary Plex server are stored as "name@secondary". -#}
+{%- set is_secondary = user is string and user.endswith('@secondary') -%}
+{%- set display = user[:-10] if is_secondary else user -%}
+{%- set t = (user_types or {}).get(user, (user_types or {}).get(display, 'shared') if not is_secondary else 'shared') -%}
+<span class="badge user-badge user-badge--{{ t }}{% if classes %} {{ classes }}{% endif %}"{% if style %} style="{{ style }}"{% endif %}{% if is_secondary %} title="{{ display }} on {{ secondary_server_name() if secondary_server_name is defined else 'Secondary' }}"{% endif %}>{{ display }}{% if is_secondary %} <span class="server-tag">{{ secondary_server_name() if secondary_server_name is defined else 'Secondary' }}</span>{% endif %}</span>
 {%- endmacro %}

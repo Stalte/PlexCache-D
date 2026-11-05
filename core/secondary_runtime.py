@@ -76,7 +76,9 @@ class SecondaryServerRuntime:
             self.manager.connect()
         except Exception as e:  # ConnectionError from PlexManager, or anything unexpected
             self._failed_reason = str(e)
-            logging.warning(
+            # ERROR (not WARNING) so it shows on the dashboard's last-run errors
+            # and in error-level notifications.
+            logging.error(
                 f"{LOG_PREFIX} '{self.name}' is unreachable ({e}). Continuing with the "
                 f"primary server only; files the '{self.name}' users were keeping on "
                 f"cache stay protected this run."

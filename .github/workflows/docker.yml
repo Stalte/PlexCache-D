@@ -92,8 +92,8 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            # latest only for full (non-prerelease) releases
-            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+            # latest for full (non-prerelease) releases, and (fork) for every push to main
+            type=raw,value=latest,enable=${{ (github.event_name == 'release' && !github.event.release.prerelease) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
       - name: Compute IMAGE_TAG build arg
         id: image_tag
