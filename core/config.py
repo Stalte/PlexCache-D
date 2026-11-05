@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
 from core.system_utils import parse_size_bytes
+from core.secondary_server import SecondaryServerConfig, load_secondary_config, get_primary_name
 
 # Get the directory where config.py is located
 _SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -385,6 +386,8 @@ class ConfigManager:
         self.notification = NotificationConfig()
         self.paths = PathConfig()
         self.plex = PlexConfig()
+        self.secondary = SecondaryServerConfig()  # fork: optional second Plex server
+        self.primary_server_name = "Primary"
         self.cache = CacheConfig()
         self.performance = PerformanceConfig()
         self.logging = LoggingConfig()
@@ -499,6 +502,10 @@ class ConfigManager:
                     per_user_watchlist_days[title] = float(u['watchlist_retention_days'])
         self.plex.per_user_ondeck_days = per_user_ondeck_days or None
         self.plex.per_user_watchlist_days = per_user_watchlist_days or None
+
+        # Fork: optional secondary Plex server (see core/secondary_server.py)
+        self.secondary = load_secondary_config(self.settings_data)
+        self.primary_server_name = get_primary_name(self.settings_data)
     
     def _validate_eviction_settings(self) -> None:
         """Range-check the eviction trio, and flag a threshold that cannot act.
@@ -1059,6 +1066,15 @@ class ConfigManager:
     def get_rss_cache_file(self) -> Path:
         """Get the path for the RSS feed cache file."""
         return self.get_data_folder() / "rss_cache.json"
+
+    def get_secondary_user_tokens_file(self) -> Path:
+        """User token cache for the secondary Plex server (kept separate so the
+        two servers' machine ids don't evict each other's cached tokens)."""
+        return self.get_data_folder() / "secondary_user_tokens.json"
+
+    def get_secondary_rss_cache_file(self) -> Path:
+        """RSS cache for the secondary Plex server."""
+        return self.get_data_folder() / "secondary_rss_cache.json"
 
     def get_lock_file(self) -> Path:
         """Get the path for the instance lock file."""

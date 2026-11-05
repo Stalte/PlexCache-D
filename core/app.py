@@ -29,12 +29,17 @@ from core.config import ConfigManager
 from core.logging_config import LoggingManager, reset_warning_error_flag
 from core.system_utils import SystemDetector, FileUtils, SingleInstanceLock, get_disk_usage, get_array_direct_path, detect_zfs, set_zfs_prefixes, format_bytes, create_dir_with_ownership, check_cache_share_alignment, cleanup_empty_parent_folders, resolve_cache_boundary, sweep_empty_folders
 from core.plex_api import PlexManager, OnDeckItem
+from core.secondary_runtime import SecondaryServerRuntime, snapshot_secondary_ondeck, replay_secondary_ondeck
 from core.file_operations import MultiPathModifier, SiblingFileFinder, FileFilter, FileMover, PlexcachedRestorer, CacheTimestampTracker, WatchlistTracker, OnDeckTracker, CachePriorityManager, PlexcachedMigration, get_media_identity, find_matching_plexcached, is_directory_level_file, is_video_file, save_json_atomically
 from core.pinned_media import PinnedMediaTracker, resolve_pins_to_paths
 
 
 class PlexCacheApp:
     """Main PlexCache application class."""
+
+    # Fork: optional second Plex server (class default so partially-built
+    # instances in tests behave like a single-server install).
+    secondary_runtime = None
 
     # One-time data migrations, keyed by name in data/migrations.json.
     _MIGRATIONS_FILENAME = "migrations.json"
@@ -63,6 +68,7 @@ class PlexCacheApp:
         # Will be initialized after config loading
         self.logging_manager = None
         self.plex_manager = None
+        self.secondary_runtime = None  # fork: optional second Plex server
         self.file_path_modifier = None
         self.sibling_finder = None
         self.file_filter = None
@@ -573,6 +579,8 @@ class PlexCacheApp:
             plex_db_path=self.config_manager.plex.plex_db_path,
             watchlist_enabled=self.config_manager.cache.watchlist_toggle
         )
+        # Fork: optional secondary Plex server sharing this cache
+        self.secondary_runtime = SecondaryServerRuntime.from_config(self.config_manager)
 
     def _init_path_modifier(self) -> None:
         """Initialize path modifier and subtitle finder."""
@@ -1020,6 +1028,10 @@ class PlexCacheApp:
             if new_users:
                 self._add_new_users_to_settings(new_users)
 
+        # Fork: connect the secondary server (never raises; failures mark it incomplete)
+        if self.secondary_runtime is not None:
+            self.secondary_runtime.connect(self.plex_manager.plex)
+
     def _add_new_users_to_settings(self, new_users: List[dict]) -> None:
         """Add newly discovered users to settings with tracking disabled.
 
@@ -1062,6 +1074,16 @@ class PlexCacheApp:
     def _check_active_sessions(self) -> None:
         """Check for active Plex sessions."""
         sessions = self.plex_manager.get_active_sessions()
+        # Fork: files streaming from the secondary server are skipped too
+        secondary_paths = (self.secondary_runtime.get_active_session_paths()
+                           if self.secondary_runtime is not None else [])
+        if secondary_paths:
+            if self.config_manager.exit_if_active_session:
+                logging.warning('There is an active session on the secondary server. Exiting...')
+                sys.exit('There is an active session. Exiting...')
+            for converted_path in self.file_path_modifier.modify_file_paths(secondary_paths):
+                logging.debug(f"Skipping active session file (secondary): {converted_path}")
+                self.files_to_skip.append(converted_path)
         if sessions:
             if self.config_manager.exit_if_active_session:
                 logging.warning('There is an active session. Exiting...')
@@ -1143,6 +1165,9 @@ class PlexCacheApp:
         # Prepare OnDeck tracker for new run (preserves first_seen for retention tracking)
         # Snapshot the rating_key index before update loop for upgrade detection
         pre_run_rk_index = {rk: set(paths) for rk, paths in getattr(self.ondeck_tracker, '_rating_key_index', {}).items()}
+        # Fork: remember the secondary users' OnDeck in case that server is down this run
+        secondary_snapshot = (snapshot_secondary_ondeck(getattr(self.ondeck_tracker, '_data', {}))
+                              if self.secondary_runtime is not None else [])
         self.ondeck_tracker.prepare_for_run()
 
         # --- Pinned Media (always-cached items) ---
@@ -1167,6 +1192,14 @@ class PlexCacheApp:
             per_user_days=self.config_manager.plex.per_user_ondeck_days,
             prefetch_minimum_minutes=self.config_manager.cache.prefetch_minimum_minutes
         )
+
+        # Fork: merge OnDeck from the secondary server (usernames are server-qualified)
+        if self.secondary_runtime is not None:
+            ondeck_items_list = list(ondeck_items_list) + self.secondary_runtime.get_on_deck_media(
+                self.config_manager.plex.days_to_monitor,
+                self.config_manager.plex.number_episodes,
+                prefetch_minimum_minutes=self.config_manager.cache.prefetch_minimum_minutes,
+            )
 
         # Extract just the file paths for path modification
         ondeck_files = [item.file_path for item in ondeck_items_list]
@@ -1206,6 +1239,14 @@ class PlexCacheApp:
                                  "episode": ep["episode"]} if ep else None
             }
 
+        # Fork: secondary server unreachable/partial -> keep last run's secondary OnDeck
+        if self.secondary_runtime is not None and not self.secondary_runtime.is_ondeck_complete() and secondary_snapshot:
+            kept = replay_secondary_ondeck(self.ondeck_tracker, secondary_snapshot)
+            existing = set(modified_ondeck)
+            modified_ondeck = list(modified_ondeck) + [p for p in kept if p not in existing]
+            logging.warning(f"[SECONDARY] Keeping {len(kept)} file(s) from the last successful "
+                            f"'{self.secondary_runtime.name}' OnDeck scan protected")
+
         # Detect and transfer tracking for upgraded media files (Sonarr/Radarr swaps)
         if self.config_manager.cache.auto_transfer_upgrades:
             self._detect_and_transfer_upgrades(ondeck_items_list, plex_to_real, pre_run_rk_index)
@@ -1213,7 +1254,9 @@ class PlexCacheApp:
         # Check OnDeck retention — expired items are no longer protected
         ondeck_retention_days = self.config_manager.cache.ondeck_retention_days
         if ondeck_retention_days > 0:
-            per_user_od_days = self.config_manager.plex.per_user_ondeck_days or {}
+            per_user_od_days = dict(self.config_manager.plex.per_user_ondeck_days or {})
+            if self.secondary_runtime is not None:
+                per_user_od_days.update(self.secondary_runtime.qualified_ondeck_days())
             expired = set()
             for item in ondeck_items_list:
                 real_path = plex_to_real.get(item.file_path, item.file_path)
@@ -1345,7 +1388,11 @@ class PlexCacheApp:
         # off, no cached file is held by the watchlist, so incomplete plex.tv data
         # can't cause a wrong move.
         if self.config_manager.cache.watched_move:
-            if not self.plex_manager.is_ondeck_data_complete():
+            if (self.secondary_runtime is not None
+                    and not self.secondary_runtime.is_complete(self.config_manager.cache.watchlist_toggle)):
+                logging.warning(f"Skipping array restore - '{self.secondary_runtime.name}' data incomplete (server unreachable)")
+                logging.warning("Files will remain on cache until next successful run")
+            elif not self.plex_manager.is_ondeck_data_complete():
                 logging.warning("Skipping array restore - OnDeck data incomplete (Plex server unreachable)")
                 logging.warning("Files will remain on cache until next successful run")
             elif (self.config_manager.cache.watchlist_toggle
@@ -1504,7 +1551,9 @@ class PlexCacheApp:
         result_set = set()
         plex_path_to_info = {}  # Maps plex paths to episode_info for media_info_map
         retention_days = self.config_manager.cache.watchlist_retention_days
-        per_user_wl_days = self.config_manager.plex.per_user_watchlist_days or {}
+        per_user_wl_days = dict(self.config_manager.plex.per_user_watchlist_days or {})
+        if self.secondary_runtime is not None:
+            per_user_wl_days.update(self.secondary_runtime.qualified_watchlist_days())
         expired_count = 0
 
         try:
@@ -1525,6 +1574,10 @@ class PlexCacheApp:
                 self.config_manager.plex.skip_watchlist,
                 home_users=home_users
             ))
+            # Fork: merge the secondary server's watchlists (usernames are server-qualified)
+            if self.secondary_runtime is not None:
+                fetched_watchlist.extend(self.secondary_runtime.get_watchlist_media(
+                    self.config_manager.cache.watchlist_episodes))
 
             for item in fetched_watchlist:
                 if self.should_stop:
@@ -2984,6 +3037,13 @@ class PlexCacheApp:
         """
         eviction_mode = self.config_manager.cache.cache_eviction_mode
         if eviction_mode == "none":
+            return (0, 0)
+
+        # Fork: never evict while the secondary server's view is missing — files its
+        # users are watching would look unneeded.
+        if (self.secondary_runtime is not None
+                and not self.secondary_runtime.is_complete(self.config_manager.cache.watchlist_toggle)):
+            logging.warning(f"[EVICTION] Skipped - '{self.secondary_runtime.name}' data incomplete this run")
             return (0, 0)
 
         cache_dir = self.config_manager.paths.cache_dir
