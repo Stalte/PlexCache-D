@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from web import __version__
 from web.config import templates, STATIC_DIR, PROJECT_ROOT, CONFIG_DIR, SETTINGS_FILE
 from web.routers import dashboard, cache, settings, operations, logs, api, maintenance, setup, auth, pinned, recently_added
+from web.routers import secondary_server  # fork: secondary Plex server
 from web.services import get_scheduler_service, get_settings_service
 from web.services.web_cache import init_web_cache, get_web_cache_service
 import os
@@ -202,6 +203,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # Include routers
 app.include_router(dashboard.router)
 app.include_router(cache.router, prefix="/cache", tags=["cache"])
+app.include_router(secondary_server.router, prefix="/settings/secondary", tags=["settings"])
 app.include_router(settings.router, prefix="/settings", tags=["settings"])
 app.include_router(operations.router, prefix="/operations", tags=["operations"])
 app.include_router(logs.router, prefix="/logs", tags=["logs"])

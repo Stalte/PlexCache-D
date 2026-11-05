@@ -1557,6 +1557,22 @@ class SettingsService:
                 if "uuid" in user:
                     user["uuid"] = "[REDACTED]"
 
+            # Fork: redact the secondary server the same way
+            secondary = settings.get("secondary_server")
+            if isinstance(secondary, dict):
+                secondary["plex_token"] = ""
+                if secondary.get("plex_url"):
+                    secondary["plex_url"] = "[REDACTED]"
+                secondary["admin_plex_id"] = "[REDACTED]" if secondary.get("admin_plex_id") else ""
+                secondary["admin_username"] = "[REDACTED]" if secondary.get("admin_username") else ""
+                for i, user in enumerate(secondary.get("users", []) or [], 1):
+                    user["title"] = f"Secondary User {i}"
+                    user["token"] = ""
+                    if "id" in user:
+                        user["id"] = 0
+                    if "uuid" in user:
+                        user["uuid"] = "[REDACTED]"
+
         return settings
 
     def validate_import_settings(self, settings_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1634,7 +1650,9 @@ class SettingsService:
             "sonarr_enabled", "sonarr_url", "sonarr_api_key",
             "radarr_enabled", "radarr_url", "radarr_api_key",
             # Legacy keys that may exist
-            "plex_source", "real_source", "nas_library_folders", "plex_library_folders"
+            "plex_source", "real_source", "nas_library_folders", "plex_library_folders",
+            # Fork: secondary Plex server
+            "secondary_server", "primary_server_name",
         }
         unknown_keys = set(settings_data.keys()) - known_keys
         if unknown_keys:

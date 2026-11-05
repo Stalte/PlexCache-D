@@ -1,0 +1,99 @@
+{# Fork: users of the secondary Plex server. Fields are keyed by row index. #}
+{% set users = settings.users %}
+{% if message %}
+<div class="alert alert-success alert-auto-dismiss" role="alert">
+    <i data-lucide="check-circle"></i>
+    {{ message }}
+</div>
+{% endif %}
+{% if users %}
+<div class="user-list user-list-scrollable">
+    <div class="user-list-header">
+        <span class="user-col">User</span>
+        <span class="user-col-group">
+            <span class="user-col-group__label">Sources</span>
+            <span class="user-col-group__cols">
+                <span class="toggle-col">OnDeck</span>
+                <span class="toggle-col">Watchlist</span>
+            </span>
+        </span>
+        <span class="user-col-group">
+            <span class="user-col-group__label">Monitoring Overrides</span>
+            <span class="user-col-group__cols">
+                <span class="monitor-col" title="OnDeck monitoring window per user (blank = global default)">OnDeck</span>
+                <span class="monitor-col" title="Watchlist retention per user (blank = global default)">Watchlist</span>
+            </span>
+        </span>
+        <span class="token-status-col">Token</span>
+    </div>
+    <div class="user-list-body">
+        {% for user in users %}
+        {% set i = loop.index0 %}
+        <div class="user-row-wrapper">
+            <div class="user-row {% if user.is_admin %}user-admin{% endif %}">
+                <span class="user-col">
+                    <span class="user-name">{{ user.title }}</span>
+                    {% if user.is_admin %}
+                        <span class="badge badge-muted">Admin</span>
+                    {% elif user.is_local %}
+                        <span class="badge badge-info">Local</span>
+                    {% else %}
+                        <span class="badge badge-warning">Remote</span>
+                    {% endif %}
+                </span>
+                <span class="user-col-group">
+                    <span class="toggle-col">
+                        <label class="toggle-switch">
+                            <input type="checkbox" name="include_ondeck_{{ i }}" value="on"
+                                   {% if not user.skip_ondeck %}checked{% endif %}
+                                   {% if user.is_admin %}disabled checked title="The owner is always included"{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </span>
+                    <span class="toggle-col">
+                        <label class="toggle-switch" {% if not user.is_local and not user.is_admin %}title="Only the owner and Plex Home users have readable watchlists"{% endif %}>
+                            <input type="checkbox" name="include_watchlist_{{ i }}" value="on"
+                                   {% if not user.skip_watchlist %}checked{% endif %}
+                                   {% if user.is_admin %}disabled checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </span>
+                </span>
+                <span class="user-col-group">
+                    <span class="monitor-col">
+                        <input type="number" name="days_to_monitor_{{ i }}"
+                               value="{{ user.days_to_monitor if user.days_to_monitor is defined and user.days_to_monitor is not none else '' }}"
+                               placeholder="&#8212;" min="1" max="9999" class="monitor-input"
+                               title="OnDeck days to monitor (blank = global default: {{ settings.days_to_monitor|default(183) }} days)">
+                    </span>
+                    <span class="monitor-col">
+                        <input type="number" name="watchlist_retention_days_{{ i }}"
+                               value="{{ user.watchlist_retention_days if user.watchlist_retention_days is defined and user.watchlist_retention_days is not none else '' }}"
+                               placeholder="&#8212;" min="0" max="9999" step="0.5" class="monitor-input"
+                               title="Watchlist retention days (blank = global default: {{ settings.watchlist_retention_days|default(0) or 'disabled' }})">
+                    </span>
+                </span>
+                <span class="token-status-col">
+                    {% if user.is_admin %}
+                    {% elif user.token %}
+                        <i data-lucide="key-round" class="token-ok" title="Token configured"></i>
+                    {% elif user.is_local %}
+                        <i data-lucide="key-round" class="token-fallback" title="Using Home User fallback (switchHomeUser)"></i>
+                    {% else %}
+                        <i data-lucide="key-round" class="token-missing" title="No token — OnDeck unavailable. Paste one below."></i>
+                    {% endif %}
+                </span>
+            </div>
+            {% if not user.is_admin and not user.token %}
+            <div class="form-group" style="margin: 0.25rem 0 0.75rem 0;">
+                <input type="password" name="user_token_{{ i }}" placeholder="Paste a token for {{ user.title }} (optional)" class="form-control">
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% else %}
+<p class="text-muted">No users yet. Save the connection, then click <strong>Sync Users</strong>.</p>
+{% endif %}
+<script>lucide.createIcons();</script>

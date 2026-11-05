@@ -181,3 +181,28 @@ def truncate_filename(value, length=55, end='...'):
 
 
 templates.env.filters["truncate_filename"] = truncate_filename
+
+
+# Fork: display name of the secondary Plex server, for the user badge macro.
+# Cached by settings-file mtime so pages with many badges read the file once.
+_secondary_name_cache = {"mtime": None, "name": "Secondary"}
+
+
+def _secondary_server_name() -> str:
+    try:
+        mtime = SETTINGS_FILE.stat().st_mtime
+    except OSError:
+        return _secondary_name_cache["name"]
+    if mtime != _secondary_name_cache["mtime"]:
+        name = "Secondary"
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                sec = (json.load(f) or {}).get("secondary_server") or {}
+            name = (sec.get("name") or "Secondary").strip() or "Secondary"
+        except (OSError, ValueError, AttributeError):
+            pass
+        _secondary_name_cache.update(mtime=mtime, name=name)
+    return _secondary_name_cache["name"]
+
+
+templates.env.globals["secondary_server_name"] = _secondary_server_name

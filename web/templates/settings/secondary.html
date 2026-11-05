@@ -1,0 +1,177 @@
+{% extends "settings/index.html" %}
+
+{# Fork: second Plex server that shares this cache. #}
+{% block settings_content %}
+<form hx-put="/settings/secondary" hx-target="#settings-alert-container" hx-swap="innerHTML">
+<div class="card">
+    <div class="card-header">
+        <i data-lucide="server"></i>
+        <h2>Secondary Plex Server</h2>
+    </div>
+    <div class="card-body">
+        <div class="form-hint mb-1">
+            A second Plex server that uses the same media folders as your primary one. Both servers share one cache,
+            one exclusion list and one eviction pass; each has its own owner and users. Libraries are matched to the
+            primary's selection by name.
+        </div>
+        <div class="form-group" data-setting-id="secondary_enabled">
+            <label class="switch">
+                <input type="checkbox" name="enabled" id="secondary_enabled" {% if settings.enabled %}checked{% endif %}>
+                <span>Use the secondary server</span>
+            </label>
+        </div>
+        <div class="grid grid-2">
+            <div class="form-group" data-setting-id="primary_server_name">
+                <label for="primary_name">Primary server name</label>
+                <input type="text" id="primary_name" name="primary_name" value="{{ settings.primary_name }}" placeholder="Primary">
+            </div>
+            <div class="form-group" data-setting-id="secondary_server_name">
+                <label for="secondary_name">Secondary server name</label>
+                <input type="text" id="secondary_name" name="name" value="{{ settings.name }}" placeholder="Secondary">
+            </div>
+            <div class="form-group" data-setting-id="secondary_plex_url">
+                <label for="secondary_plex_url">Plex URL</label>
+                <input type="text" id="secondary_plex_url" name="plex_url" value="{{ settings.plex_url }}"
+                       placeholder="http://192.168.1.10:32401">
+            </div>
+            <div class="form-group mb-0" data-setting-id="secondary_plex_token">
+                <label for="secondary_plex_token">Owner's Plex Token</label>
+                <div class="flex gap-1">
+                    <input type="password" id="secondary_plex_token" name="plex_token" value="{{ settings.plex_token }}"
+                           placeholder="Secondary owner's token" style="flex: 1;">
+                    <button type="button" class="btn btn-secondary oauth-btn" onclick="startSecondaryOAuth()"
+                            title="Sign in with the secondary server owner's Plex account">
+                        <i data-lucide="key"></i>
+                        <span>Get Token</span>
+                    </button>
+                </div>
+                <div class="form-hint">
+                    Sign in with the <strong>secondary owner's</strong> Plex account, or paste its token. If Plex signs
+                    you straight in as the primary owner, use a private window or paste the token instead.
+                    {% if settings.admin_username %}Current owner: <strong>{{ settings.admin_username }}</strong>.{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body" style="padding: 1rem 1.25rem;">
+        <div class="form-group mb-0" style="display: flex; gap: 1rem; align-items: center;">
+            <button type="submit" class="btn btn-primary">
+                <i data-lucide="save"></i>
+                Save Connection
+            </button>
+            <button type="button" class="btn btn-secondary"
+                    hx-post="/settings/secondary/test"
+                    hx-include="#secondary_plex_url, #secondary_plex_token"
+                    hx-target="#secondary-test-result"
+                    hx-swap="innerHTML">
+                <i data-lucide="plug"></i>
+                Test Connection
+            </button>
+            <div id="secondary-test-result"></div>
+        </div>
+    </div>
+</div>
+</form>
+
+<form hx-put="/settings/secondary/users" hx-target="#settings-alert-container" hx-swap="innerHTML">
+<div class="card">
+    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <i data-lucide="user-check"></i>
+            <h2>Secondary Server Users</h2>
+        </div>
+        <button type="button" class="btn btn-secondary"
+                hx-post="/settings/secondary/users/sync"
+                hx-target="#secondary-users-container"
+                hx-swap="innerHTML"
+                hx-indicator="#secondary-sync-spinner">
+            <span id="secondary-sync-spinner" class="htmx-indicator spinner" style="width: 14px; height: 14px;"></span>
+            <i data-lucide="refresh-cw" class="htmx-indicator-hide" style="width: 14px; height: 14px;"></i>
+            Sync Users
+        </button>
+    </div>
+    <div class="card-body">
+        <div class="form-hint mb-1">
+            These users are tracked separately from the primary server's users, even when the same person is on both.
+            Multi-user support is turned on or off for both servers under the Users tab.
+        </div>
+        <div id="secondary-users-container" hx-get="/settings/secondary/users" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+            {% include "settings/partials/users_skeleton.html" %}
+        </div>
+    </div>
+</div>
+<div class="card">
+    <div class="card-body" style="padding: 1rem 1.25rem;">
+        <button type="submit" class="btn btn-primary">
+            <i data-lucide="save"></i>
+            Save Users
+        </button>
+    </div>
+</div>
+</form>
+
+<div id="secondary-oauth-modal" class="modal" style="display: none;">
+    <div class="modal-backdrop" onclick="closeSecondaryOAuth()"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Sign in with Plex</h3>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="closeSecondaryOAuth()">
+                <i data-lucide="x"></i>
+            </button>
+        </div>
+        <div class="modal-body" id="secondary-oauth-body"></div>
+    </div>
+</div>
+
+<script>
+    let secOauthWindow = null, secOauthPoll = null;
+
+    function secOauthMessage(icon, color, title, detail, buttonLabel) {
+        document.getElementById('secondary-oauth-body').innerHTML = `
+            <div class="text-center">
+                ${icon ? `<i data-lucide="${icon}" style="width: 48px; height: 48px; color: var(${color});"></i>` : '<div class="spinner mb-2"></div>'}
+                <p class="mt-2">${title}</p>
+                <p class="text-muted">${detail}</p>
+                ${buttonLabel ? `<button type="button" class="btn btn-secondary mt-2" onclick="closeSecondaryOAuth()">${buttonLabel}</button>` : ''}
+            </div>`;
+        lucide.createIcons();
+    }
+
+    async function startSecondaryOAuth() {
+        document.getElementById('secondary-oauth-modal').style.display = 'flex';
+        secOauthMessage(null, null, 'Requesting authorization from Plex...', '', null);
+        try {
+            const start = await (await fetch('/settings/plex/oauth/start', {method: 'POST', headers: {'Accept': 'application/json'}})).json();
+            if (!start.success) throw new Error(start.error || 'Failed to start sign-in');
+            secOauthWindow = window.open(start.auth_url, 'PlexAuth', 'width=800,height=600');
+            secOauthMessage(null, null, 'Waiting for you to sign in...', 'Sign in as the secondary server owner in the popup.', 'Cancel');
+            secOauthPoll = setInterval(async () => {
+                try {
+                    const poll = await (await fetch(`/settings/plex/oauth/poll?client_id=${start.client_id}`, {headers: {'Accept': 'application/json'}})).json();
+                    if (!poll.success) {
+                        clearInterval(secOauthPoll);
+                        if (secOauthWindow) secOauthWindow.close();
+                        secOauthMessage('alert-circle', '--plex-error', 'Authentication failed', poll.error, 'Close');
+                    } else if (poll.complete && poll.token) {
+                        clearInterval(secOauthPoll);
+                        if (secOauthWindow) secOauthWindow.close();
+                        document.getElementById('secondary_plex_token').value = poll.token;
+                        secOauthMessage('check-circle', '--plex-success', 'Signed in', 'Token filled in. Click Save Connection to apply.', 'Done');
+                    }
+                } catch (e) { console.error('Error polling for token:', e); }
+            }, 2000);
+        } catch (error) {
+            secOauthMessage('alert-circle', '--plex-error', 'Failed to start authentication', error.message, 'Close');
+        }
+    }
+
+    function closeSecondaryOAuth() {
+        document.getElementById('secondary-oauth-modal').style.display = 'none';
+        if (secOauthPoll) { clearInterval(secOauthPoll); secOauthPoll = null; }
+        if (secOauthWindow && !secOauthWindow.closed) { secOauthWindow.close(); secOauthWindow = null; }
+    }
+</script>
+{% endblock %}
